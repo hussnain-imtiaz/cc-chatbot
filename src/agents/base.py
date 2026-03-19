@@ -91,6 +91,10 @@ class AgentSession:
     def to_list(self):
         return list(self.messages)
 
+    def last_n(self, n):
+        # see the last few exchanges without printing everything - MEMORY
+        return self.messages[-n:]
+
     def __len__(self):
         return len(self.messages)
 
