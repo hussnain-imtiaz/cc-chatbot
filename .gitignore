@@ -7,15 +7,6 @@ __pycache__/
 .DS_Store
 llmops/traces.db
 
-# Data - files ending with csv or docs
-*.csv
-*.doc
-*.docx
-*.pdf
-*.xlsx
-*.xls
-*.json
-
 # Experimentation
 notebooks-playground/
 
