@@ -1,0 +1,23 @@
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: install deps
+        run: uv sync --all-extras
+
+      - name: run tests
+        run: uv run pytest tests/ -v

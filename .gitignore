@@ -7,6 +7,9 @@ __pycache__/
 .DS_Store
 llmops/traces.db
 
+# Experimentation
+notebooks-playground/
+
 # UV
 .python-version
 uv.lock
