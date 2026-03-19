@@ -153,3 +153,79 @@ async def test_agent_calls_tool_and_returns_final():
     assert result == "Rome has great food."
     # should have called OpenAI twice — once to get tool call, once for final answer
     assert client.chat.completions.create.call_count == 2
+
+# --- multi-turn memory ---
+
+def test_session_preserves_order():
+    s = AgentSession()
+    s.add_user("first")
+    s.add_assistant("reply one")
+    s.add_user("second")
+    s.add_assistant("reply two")
+    lst = s.to_list()
+    assert lst[0]["content"] == "first"
+    assert lst[1]["content"] == "reply one"
+    assert lst[2]["content"] == "second"
+    assert lst[3]["content"] == "reply two"
+
+def test_session_last_n():
+    s = AgentSession()
+    s.add_user("a")
+    s.add_assistant("b")
+    s.add_user("c")
+    last = s.last_n(2)
+    assert len(last) == 2
+    assert last[0]["content"] == "b"
+    assert last[1]["content"] == "c"
+
+def test_session_last_n_more_than_exists():
+    s = AgentSession()
+    s.add_user("only one")
+    # asking for 10 when there's only 1 should just return all
+    assert len(s.last_n(10)) == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_uses_session_history():
+    # second call should include history from first call in the messages sent to OpenAI
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=make_mock_response(content="I remember.")
+    )
+
+    agent = Agent(client=client, name="test", instructions="helpful",
+                  model="gpt-4o-mini")
+    session = agent.create_session()
+
+    # first turn
+    await agent.run("my name is Alice", session=session)
+    # second turn
+    await agent.run("what is my name?", session=session)
+
+    # get what was sent in the second call
+    second_call_messages = client.chat.completions.create.call_args_list[1][1]["messages"]
+
+    # history from first turn should be in there
+    contents = [m["content"] for m in second_call_messages]
+    assert "my name is Alice" in contents
+
+
+@pytest.mark.asyncio
+async def test_agent_without_session_no_history():
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=make_mock_response(content="ok")
+    )
+
+    agent = Agent(client=client, name="test", instructions="helpful",
+                  model="gpt-4o-mini")
+
+    await agent.run("first message")
+    await agent.run("second message")
+
+    # each call should only have system + that one user message (no history)
+    first_call_msgs = client.chat.completions.create.call_args_list[0][1]["messages"]
+    second_call_msgs = client.chat.completions.create.call_args_list[1][1]["messages"]
+
+    assert len(first_call_msgs) == 2   # system + user
+    assert len(second_call_msgs) == 2  # system + user (no history carried over)
