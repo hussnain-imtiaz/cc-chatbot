@@ -106,11 +106,13 @@ class Agent:
         self.tools = tools or []
         self.response_format = response_format
         self.max_iterations = max_iterations
+        self.last_usage = {"tokens_in": 0, "tokens_out": 0, "model": self.model}
 
     def create_session(self):
         return AgentSession()
 
     async def run(self, message, session=None, extra_context=None):
+        self.last_usage = {"tokens_in": 0, "tokens_out": 0, "model": self.model}
         system = self.instructions
         if extra_context:
             system += f"\n\n{extra_context}"
@@ -144,6 +146,12 @@ class Agent:
         for _ in range(self.max_iterations):
             resp = await self.client.chat.completions.create(**kwargs)
             msg = resp.choices[0].message
+
+            # token usage from this call
+            if resp.usage:
+                self.last_usage["tokens_in"] += resp.usage.prompt_tokens
+                self.last_usage["tokens_out"] += resp.usage.completion_tokens
+                self.last_usage["model"] = self.model
 
             if not msg.tool_calls:
                 content = msg.content or ""
