@@ -9,7 +9,8 @@ import traceback
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from dotenv import load_dotenv
-load_dotenv()
+from pathlib import Path
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from src.agents.orchestrator import analyse
 from src.memory.memory import ConversationMemory
