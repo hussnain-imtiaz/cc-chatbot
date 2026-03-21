@@ -4,7 +4,7 @@ from datetime import datetime
 from src.data.loader import parse_string_interval, parse_excel_serial, load_all
 
 
-# --- timestamp parsing ---
+# timestamp parsing
 def test_string_interval_normal():
     result = parse_string_interval("01/01/2026 (09:00:00 - 09:59:59)")
     assert result == datetime(2026, 1, 1, 9, 0, 0)
@@ -30,7 +30,7 @@ def test_excel_serial_handles_null():
     assert isinstance(result, datetime)
 
 
-# --- actual loaded dataframes ---
+# actual loaded dataframes
 
 @pytest.fixture(scope="module")
 def dfs():
@@ -65,6 +65,6 @@ def test_no_nulls_in_dt_column(dfs):
         assert df["dt"].isna().sum() == 0, f"{name} has null dt values"
 
 def test_caching_returns_same_object(dfs):
-    # load_all() should return the same dict — not re-read the files
+    # load_all() should return the same dict - not re-read the files
     dfs2 = load_all()
     assert dfs["estate"] is dfs2["estate"]

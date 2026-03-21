@@ -1,66 +1,108 @@
 import json
 import os
-import asyncio
 from src.agents.base import Agent
 from src.agents.client_factory import make_client, get_model
 
-
-# all relative dates resolve from this — end of the data range
 CURRENT_DATE = os.getenv("CURRENT_DATE", "2026-01-31")
 
-
 INSTRUCTIONS = f"""You are an intent classification agent for a contact centre analytics chatbot.
-Today is {CURRENT_DATE}. All data covers January 2026.
+Today is {CURRENT_DATE}. The database has January 2026 data only.
 
-Your only job is to read the user's question and return a JSON object.
-Never answer the question itself — just classify it.
+Your only job: read the user message and classify it. Return JSON. Never answer.
 
-Return this exact JSON structure:
+You will receive recent conversation history as context above the question.
+USE IT. Short follow-ups like "what about queues", "show last week", "same but
+for agents" all refer to the previous topic - resolve them using history.
+
+Return ONLY this JSON:
 {{
     "intent": "aggregate | top_n | compare | peak | staffing | unknown",
     "subject": "volume | wait_time | abandonment | talk_time | service_level | availability | other",
-    "table": "estate | queues | agents | unclear",
-    "time_start": "YYYY-MM-DD or null",
-    "time_end": "YYYY-MM-DD or null",
+    "table": "estate | queues | agents | all | unclear",
+    "time_start": "YYYY-MM-DD",
+    "time_end": "YYYY-MM-DD",
     "business_hours_only": true or false,
     "n": number or null,
     "is_clear": true or false,
-    "clarification_question": "one short question to ask the user, or null if clear"
+    "clarification_question": "one short question or null"
 }}
 
-Intent types:
-- aggregate: total, average, count, sum, how many
-- top_n: top N, highest, lowest, best, worst, ranking
-- compare: first half vs second half, this week vs last week, compare
-- peak: busiest, peak, when was highest, what hour
-- staffing: how many agents needed, staffing, Erlang
-- unknown: can't figure it out
+--- Intent types ---
+aggregate: total, count, sum, average, how many, how much
+top_n: top N, highest, lowest, best, worst, most, least, ranking
+compare: first half vs second half, compare periods, difference between
+peak: busiest, quietest, peak hour, when was highest or lowest
+staffing: how many agents needed, erlang, staffing levels
+unknown: truly cannot classify
 
-Table rules — set "table" to "unclear" if genuinely ambiguous:
-- estate: questions about the whole contact centre, no mention of specific queues or agents
-- queues: mentions queues, specific queue names, queue-level
-- agents: mentions agents, specific agent names, agent-level
-- unclear: could be any of them and it matters which one
+--- Table ---
+estate:  whole contact centre, no mention of specific queues or agents
+queues:  mentions queues, queue names, queue-level
+agents:  mentions agents, agent names, individual performance
+all:     explicitly says all tables, all three, everything, across all
+unclear: genuinely ambiguous — ask, do not default
 
-Time window rules — today is {CURRENT_DATE}:
-- "today" → time_start and time_end = 2026-01-31
-- "yesterday" → 2026-01-30
-- "last week" → 2026-01-25 to 2026-01-31
-- "first half" → 2026-01-01 to 2026-01-15
-- "second half" → 2026-01-16 to 2026-01-31
-- "all January" or no time mentioned → 2026-01-01 to 2026-01-31
-- "business hours" → set business_hours_only to true
+No table mentioned - use logic:
+- volume, calls, wait time, abandonment at whole-centre level → estate
+- which agent, agent performance → agents
+- which queue, queue service level → queues
+- row count, how many rows, total records → unclear (ask)
+- if even little bit of uncertainty, ask. Only default to estate/queues/agents if it's very clear.
 
-When to set is_clear = false and ask a clarification question:
-- table is "unclear" and the answer would differ depending on which table is used
-- time window is ambiguous and it changes the answer significantly
-- the question is too vague to write any useful SQL
 
-Keep clarification_question short — one question, maximum two options to choose from.
-Never ask more than one thing at once.
+--- Time ---
+No time mentioned → 2026-01-01 to 2026-01-31, do NOT ask
+"today" → 2026-01-31
+"yesterday" → 2026-01-30
+"last week" → 2026-01-25 to 2026-01-31
+"first half" → 2026-01-01 to 2026-01-15
+"second half" → 2026-01-16 to 2026-01-31
+"business hours" → business_hours_only: true
 
-Return only the JSON object. No explanation, no markdown, no extra text.
+--- When to set is_clear: false ---
+ONLY when the answer would genuinely differ and you cannot resolve from context:
+1. Table is unclear and it matters for the result
+2. Time is truly ambiguous (e.g. "last period" with no history to resolve it)
+
+Do NOT ask when:
+- Context from conversation history resolves it
+- No time mentioned (default January silently)
+- Table is obviously implied
+- The question works naturally at estate level
+
+One question. Short. Give 2-3 options inline.
+Good: "Which table: estate (whole centre), queues, or agents?"
+Good: "Which period: last week (Jan 25-31), first half (Jan 1-15), or all January?"
 """
+
+# things a person says when reacting to the previous answer
+# not asking a new analytics question
+FEEDBACK_SIGNALS = [
+    # wrong / incorrect
+    "not correct", "wrong", "incorrect", "not right", "not accurate",
+    "that's wrong", "thats wrong", "not what i", "not what I",
+    "that's not right", "thats not right", "doesn't look right",
+    "looks wrong", "seems wrong", "that's off", "thats off",
+    # dislike
+    "did not like", "don't like", "dont like", "not happy",
+    "not satisfied", "not good", "not useful", "not helpful",
+    "same view", "still same", "same result", "same chart",
+    "same plot", "same graph", "didn't change", "didnt change",
+    "nothing changed", "looks the same", "still showing",
+    # referring to the previous output directly
+    "your plot", "that plot", "the plot", "your chart", "that chart",
+    "the chart", "your graph", "that graph", "the graph",
+    "your answer", "that answer", "your result", "that result",
+    "the result", "the output", "your output", "this result",
+    # action on previous output
+    "fix it", "fix that", "fix the", "redo", "try again",
+    "change the chart", "change the plot", "change it",
+]
+
+# This is a bit hacky but we want to catch when the user is giving feedback on the previous answer
+def is_feedback(text):
+    low = text.lower().strip()
+    return any(signal in low for signal in FEEDBACK_SIGNALS)
 
 
 def make_intent_agent():
@@ -69,29 +111,36 @@ def make_intent_agent():
         name="IntentAgent",
         instructions=INSTRUCTIONS,
         model=get_model("intent"),
-        response_format=dict,   # forces JSON mode
-        max_iterations=1,       # intent agent never needs tool calls — one shot
+        response_format=dict,
+        max_iterations=1,
     )
 
-
-async def detect_intent(question, agent=None):
-    """
-    Runs the intent agent on a question.
-    Returns a dict with the classified intent, or a clarification question if unclear.
-    """
+# Classifies the user question. ConversationMemory for caching previous conversation history and context.
+async def detect_intent(question, agent=None, memory=None):
     if agent is None:
         agent = make_intent_agent()
 
-    raw = await agent.run(question)
+    extra = None
+    if memory is not None:
+        ctx = memory.build_context_for_intent_agent()
+        if ctx:
+            extra = ctx
+
+    raw = await agent.run(question, extra_context=extra)
 
     try:
         result = json.loads(raw)
     except json.JSONDecodeError:
-        # model didn't return valid JSON — ask for clarification rather than crash
         result = {
             "intent": "unknown",
+            "subject": "other",
+            "table": "unclear",
+            "time_start": "2026-01-01",
+            "time_end": "2026-01-31",
+            "business_hours_only": False,
+            "n": None,
             "is_clear": False,
-            "clarification_question": "Could you rephrase that? I want to make sure I understand what you're asking.",
+            "clarification_question": "Could you rephrase that?",
         }
 
     return result

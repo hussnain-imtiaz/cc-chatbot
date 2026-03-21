@@ -6,16 +6,12 @@ from src.agents.base import tool
 from src.data.db import get_conn
 from src.data.dict_rag import build_kb, lookup_column, search_concept
 
-
+# tools for exploring the contact centre data with SQL
 @tool()
 def get_schema(
     table_name: Annotated[str, "table to inspect: 'estate', 'queues', 'agents', or 'all'"] = "all",
 ) -> str:
-    """
-    Returns table names, column names with types, and one sample row.
-    Always call this before writing any SQL so you know the exact column names.
-    Column names with spaces or special characters must be wrapped in double quotes in SQL.
-    """
+
     conn = get_conn()
     cursor = conn.cursor()
 
@@ -35,7 +31,7 @@ def get_schema(
             col_names = [c["name"] for c in cols]
             sample = dict(zip(col_names, row)) if row else {}
 
-            # only show a subset of the sample — too much noise otherwise
+            # only show a subset of the sample - too much noise otherwise
             # show the timing cols + a few key metrics
             interesting = ["Interval", "dt", "date", "hour", "weekday", "is_biz_hours",
                           "Description", "queue_name", "agent_name",
@@ -55,18 +51,13 @@ def get_schema(
     return json.dumps(output, indent=2, default=str)
 
 
+# Runs a SQL query against the contact centre database and returns results as JSON.
 @tool()
 def run_sql(
     sql: Annotated[str, "the SQL SELECT query to run against the contact centre database"],
 ) -> str:
-    """
-    Executes a SQL SELECT query against the contact centre database and returns results as JSON.
-    Only SELECT statements are allowed.
-    If the query fails, the error message is returned so you can fix the SQL and retry.
-    Tables available: estate, queues, agents.
-    Always use double quotes around column names that contain spaces or special characters.
-    """
-    # safety: only allow SELECT — no drops, updates, inserts
+
+    # safety: only allow SELECT - no drops, updates, inserts
     stripped = sql.strip().upper()
     if not stripped.startswith("SELECT") and not stripped.startswith("WITH"):
         return json.dumps({
@@ -101,16 +92,12 @@ def run_sql(
     except Exception as e:
         return json.dumps({"error": str(e), "your_query": sql})
 
-
+#  Looks up what a column or concept means from the data dictionary. RAG.....
 @tool()
 def dict_lookup(
     term: Annotated[str, "column name or concept to look up e.g. 'In Ans', 'abandonment', 'service level'"],
 ) -> str:
-    """
-    Looks up what a column or concept means from the data dictionary.
-    Call this when you're unsure what a column measures before using it in SQL.
-    Also works for concepts like 'abandonment', 'service level', 'talk time'.
-    """
+
     kb = build_kb()
 
     # try exact / partial column match first

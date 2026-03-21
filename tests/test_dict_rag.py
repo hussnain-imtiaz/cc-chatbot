@@ -7,7 +7,7 @@ def kb():
     return build_kb()
 
 
-# --- kb loading ---
+#  kb loading
 
 def test_kb_has_entries(kb):
     assert len(kb) >= 30
@@ -22,7 +22,7 @@ def test_kb_caches(kb):
     assert kb is kb2  # same object, not re-parsed
 
 
-# --- exact lookup ---
+#  exact lookup
 
 def test_exact_match(kb):
     result = lookup_column("In Ans", kb)
@@ -34,7 +34,7 @@ def test_exact_match_svc(kb):
     assert "service" in result.lower() or "svc" in result.lower()
 
 
-# --- case insensitive ---
+# case insensitive
 
 def test_case_insensitive(kb):
     result = lookup_column("in ans", kb)
@@ -45,7 +45,7 @@ def test_case_insensitive_uppercase(kb):
     assert "No definition found" not in result
 
 
-# --- partial match ---
+# partial match
 
 def test_partial_match_wait(kb):
     result = lookup_column("wait", kb)
@@ -56,7 +56,7 @@ def test_partial_match_talk(kb):
     assert "talk" in result.lower()
 
 
-# --- concept search ---
+#  concept search
 
 def test_concept_search_abandonment(kb):
     result = search_concept("abandonment", kb)

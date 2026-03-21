@@ -9,7 +9,7 @@ def setup_db():
     load_db()
 
 
-# --- get_schema ---
+# get_schema
 
 def test_schema_returns_all_tables():
     result = json.loads(get_schema(table_name="all"))
@@ -39,7 +39,7 @@ def test_schema_has_note_about_quoting():
     assert "double quotes" in result["estate"]["note"]
 
 
-# --- run_sql ---
+# run_sql
 
 def test_basic_select():
     r = json.loads(run_sql("SELECT COUNT(*) as n FROM estate"))
