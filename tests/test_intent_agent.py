@@ -32,7 +32,7 @@ def make_mock_agent(response_json):
     return agent
 
 
-# --- clear intents ---
+# clear intents
 
 @pytest.mark.asyncio
 async def test_top_agents_is_clear():
@@ -97,7 +97,7 @@ async def test_compare_halves():
     assert result["is_clear"] is True
 
 
-# --- ambiguous intents — must ask clarification ---
+# ambiguous intents - must ask clarification
 
 @pytest.mark.asyncio
 async def test_ambiguous_table_asks_clarification():
@@ -137,7 +137,7 @@ async def test_vague_question_asks_clarification():
     assert result["clarification_question"] is not None
 
 
-# --- bad JSON from model — graceful fallback ---
+# bad JSON from model - graceful fallback
 
 @pytest.mark.asyncio
 async def test_bad_json_returns_clarification():
@@ -155,7 +155,7 @@ async def test_bad_json_returns_clarification():
     assert "clarification_question" in result
 
 
-# --- time window resolution ---
+# time window resolution
 
 @pytest.mark.asyncio
 async def test_last_week_dates():

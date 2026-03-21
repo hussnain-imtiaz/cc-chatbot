@@ -1,11 +1,10 @@
 import pytest
-import asyncio
 from typing import Annotated
-from unittest.mock import AsyncMock, MagicMock, patch
-from src.agents.base import tool, Tool, AgentSession, Agent
+from unittest.mock import AsyncMock, MagicMock
+from src.agents.base import tool, AgentSession, Agent
 
 
-# --- @tool decorator ---
+#@tool decorator
 
 @tool()
 def sample_tool(
@@ -53,7 +52,7 @@ def test_tool_param_descriptions():
     assert props["limit"]["description"] == "max results"
 
 
-# --- AgentSession ---
+#  AgentSession
 
 def test_session_starts_empty():
     s = AgentSession()
@@ -91,7 +90,7 @@ def test_session_to_list_is_copy():
     assert len(s) == 1
 
 
-# --- Agent.run() with mocked OpenAI ---
+# agent.run() with mocked OpenAI
 
 def make_mock_response(content=None, tool_calls=None):
     msg = MagicMock()
@@ -154,7 +153,7 @@ async def test_agent_calls_tool_and_returns_final():
     # should have called OpenAI twice — once to get tool call, once for final answer
     assert client.chat.completions.create.call_count == 2
 
-# --- multi-turn memory ---
+# multi-turn memory
 
 def test_session_preserves_order():
     s = AgentSession()

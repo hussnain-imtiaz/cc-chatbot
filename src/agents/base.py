@@ -4,17 +4,21 @@ import json
 from dataclasses import dataclass, field
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel
 
 
+# Models like o3-mini don't support temperature, so we need to check before setting it
+def _model_supports_temperature(model_name):
+    model_name = model_name.lower()
+    # o-series models (o1, o3, o4, etc.) don't support temperature
+    return not (model_name.startswith('o') and model_name[1].isdigit())
+
+
+# Simple function wrapper to hold metadata and convert to OpenAI tool schema
 class Tool:
-    # wraps a plain python function and generates the JSON schema
-    # that OpenAI needs to know the function exists and what args it takes
     def __init__(self, fn, approval_mode="never_require"):
         self.fn = fn
         self.name = fn.__name__
         self.approval_mode = approval_mode
-        # first line of docstring becomes the description the LLM sees
         self.description = (fn.__doc__ or "").strip().split("\n")[0]
 
     def __call__(self, *args, **kwargs):
@@ -28,12 +32,11 @@ class Tool:
         props = {}
         required = []
 
-        for param_name, param in sig.parameters.items():
+        for name, param in sig.parameters.items():
             ann = param.annotation
             description = ""
             py_type = str
 
-            # handles Annotated[str, "description"] from typing
             if hasattr(ann, "__metadata__"):
                 py_type = ann.__args__[0]
                 description = str(ann.__metadata__[0])
@@ -45,38 +48,32 @@ class Tool:
                 bool: "boolean", list: "array", dict: "object",
             }
 
-            props[param_name] = {
-                "type": type_map.get(py_type, "string"),
-                "description": description,
-            }
+            props[name] = {"type": type_map.get(py_type, "string"), "description": description}
 
             if param.default is inspect.Parameter.empty:
-                required.append(param_name)
+                required.append(name)
 
         return {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": {
-                    "type": "object",
-                    "properties": props,
-                    "required": required,
-                },
+                "parameters": {"type": "object", "properties": props, "required": required},
             },
         }
 
 
+# Decorator for defining tools more easily
 def tool(approval_mode="never_require"):
-    #  @tool decorator
     def decorator(fn):
         return Tool(fn, approval_mode=approval_mode)
     return decorator
 
 
+# Session class to track conversation history for an agent - Metacognition can be built on top of this by
+# analyzing the session history and extra_context before each response to identify patterns or areas for improvement.
 @dataclass
 class AgentSession:
-    # stores conversation history so the agent remembers what was said before
     messages: list = field(default_factory=list)
 
     def add_user(self, text):
@@ -92,16 +89,16 @@ class AgentSession:
         return list(self.messages)
 
     def last_n(self, n):
-        # see the last few exchanges without printing everything - MEMORY
         return self.messages[-n:]
 
     def __len__(self):
         return len(self.messages)
 
-
+# Base Agent class that can be extended for specific use cases.
+# It handles the main loop of sending messages to the model, processing tool calls, and maintaining session history.
 class Agent:
-    def __init__(self, client, name, instructions, model, tools=None,
-                 response_format=None, max_iterations=5):
+    def __init__(self, client, name, instructions, model,
+                 tools=None, response_format=None, max_iterations=5):
         self.client = client
         self.name = name
         self.instructions = instructions
@@ -116,22 +113,26 @@ class Agent:
     async def run(self, message, session=None, extra_context=None):
         system = self.instructions
         if extra_context:
-            system += f"\n\nExtra context:\n{extra_context}"
+            system += f"\n\n{extra_context}"
 
         msgs = [{"role": "system", "content": system}]
 
         if session is not None:
             msgs.extend(session.to_list())
-            session.add_user(message)
 
         msgs.append({"role": "user", "content": message})
 
+        if session is not None:
+            session.add_user(message)
 
         kwargs = {
             "model": self.model,
             "messages": msgs,
-            "temperature": 0.1,
         }
+
+        # Only set temperature for models that support it (not o-series)
+        if _model_supports_temperature(self.model):
+            kwargs["temperature"] = 0.1
 
         if self.tools:
             kwargs["tools"] = [t.to_openai_schema() for t in self.tools]
@@ -140,19 +141,16 @@ class Agent:
         if self.response_format:
             kwargs["response_format"] = {"type": "json_object"}
 
-        # agentic loop — keep going until the model stops calling tools
         for _ in range(self.max_iterations):
             resp = await self.client.chat.completions.create(**kwargs)
             msg = resp.choices[0].message
 
             if not msg.tool_calls:
-                # no more tool calls — this is the final answer
                 content = msg.content or ""
                 if session is not None:
                     session.add_assistant(content)
                 return content
 
-            # model wants to call tools — execute them and feed results back
             msgs.append({
                 "role": "assistant",
                 "content": msg.content,
@@ -176,19 +174,18 @@ class Agent:
                 except json.JSONDecodeError:
                     args = {}
 
-                matched_tool = next((t for t in self.tools if t.name == fn_name), None)
+                matched = next((t for t in self.tools if t.name == fn_name), None)
 
-                if matched_tool:
+                if matched:
                     try:
-                        result = matched_tool(**args)
+                        result = matched(**args)
                         if asyncio.iscoroutine(result):
                             result = await result
                         result_str = str(result)
-                        # metacognition: flag empty results so the model knows to retry
                         if not result_str or result_str.strip() in ("None", "{}"):
-                            result_str = f"EMPTY_RESULT: {fn_name} returned nothing. try different params."
+                            result_str = f"EMPTY_RESULT: {fn_name} returned nothing. try different parameters."
                     except Exception as e:
-                        result_str = f"TOOL_ERROR in {fn_name}: {e}. try different params."
+                        result_str = f"TOOL_ERROR in {fn_name}: {e}. try different parameters."
                 else:
                     result_str = f"UNKNOWN_TOOL: {fn_name} not found."
 
@@ -200,22 +197,4 @@ class Agent:
 
             kwargs["messages"] = msgs
 
-        return "hit max iterations without a final answer. please rephrase."
-
-
-class SequentialPipeline:
-    # simplified version of WorkflowBuilder
-    # runs agents one after another, each gets the previous output as input
-    def __init__(self, agents):
-        self.agents = agents
-
-    async def run(self, initial_message):
-        results = []
-        context = initial_message
-
-        for agent in self.agents:
-            output = await agent.run(context)
-            results.append({"agent": agent.name, "output": output})
-            context = output
-
-        return results
+        return "Could not reach a final answer. Please try rephrasing."

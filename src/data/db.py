@@ -1,5 +1,4 @@
 import sqlite3
-import pandas as pd
 from src.data.loader import load_all
 
 
@@ -40,7 +39,7 @@ def load_db(data_dir="data"):
 
 
 def get_conn():
-    # always call load_db first — this is just a safety getter
+    # always call load_db first - this is just a safety getter
     if _conn is None:
         return load_db()
     return _conn
