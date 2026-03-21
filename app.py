@@ -16,6 +16,11 @@ from src.agents.formatter import format_response
 from src.memory.memory import Turn
 from src.guardrails.guardrails import check_input, is_reaction
 from src.agents.viz_agent import plan_viz, build_chart
+from src.llmops.tracer import TraceRecord, write_trace
+import time
+import pandas as pd
+from src.llmops.tracer import read_traces, read_eval_runs
+from plotly import express as px
 
 # load environment variables from .env file
 load_dotenv()
@@ -25,7 +30,7 @@ st.set_page_config(page_title="CC Analytics", layout="centered", initial_sidebar
 # Custom CSS to control the width of the chat interface
 st.markdown("""
 <style>
-.block-container { max-width: 780px; padding-top: 1.5rem; padding-bottom: 5rem; }
+.block-container { max-width: 780px; padding-top: 2.5rem; padding-bottom: 5rem; }
 div[data-testid="stChatInput"] { max-width: 780px; }
 </style>
 """, unsafe_allow_html=True)
@@ -139,6 +144,10 @@ def run_pipeline(question, agents):
     memory = agents["memory"]
     plan = run_async(analyse(question, memory=memory, agent=agents["orchestrator"]))
 
+    # orchestrator token usage into session state for later
+    u = agents["orchestrator"].last_usage
+    st.session_state.last_orchestrator_usage = u
+
     if plan.get("action") == "clarify":
         st.session_state.stage = "clarifying"
         st.session_state.stage_data = plan
@@ -147,246 +156,418 @@ def run_pipeline(question, agents):
         st.session_state.stage = "plan"
         st.session_state.stage_data = plan
 
+tab_chat, tab_eval = st.tabs(["Chat", "Evals"])
 
-st.markdown("### Contact Centre Analytics")
-st.caption("January 2026 — estate, queues, agents")
-st.divider()
+with tab_chat:
+    st.markdown("### Contact Centre Analytics")
+    st.caption("January 2026 — estate, queues, agents")
+    st.divider()
 
-# Display the conversation history
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg.get("chart"):
-            st.plotly_chart(msg["chart"], use_container_width=True)
-
-
-stage = st.session_state.stage
-
-# Depending on the current stage of the conversation, display different content and options to the user. The main stages are:
-# - clarifying: the agent needs more information from the user before it can generate a plan
-# - plan: the agent has generated a plan and is asking the user to confirm before generating SQL
-# - sql: the agent has generated SQL and is showing it to the user, allowing them to edit before running
-# - viz: the agent has generated a visualization spec and is asking the user if they want to see it
-# - reaction: the user has indicated that something was wrong with the result, and the agent is asking for more details to understand what the issue was
-if stage == "clarifying":
-    plan = st.session_state.stage_data
-    with st.chat_message("assistant"):
-        st.write(plan.get("question", "Could you clarify what you're looking for?"))
-
-elif stage == "plan":
-    plan = st.session_state.stage_data
-    with st.chat_message("assistant"):
-        if plan.get("intent") and plan["intent"] != "unknown":
-            st.markdown(f"**Intent:** {plan['intent'].title()}")
-        st.markdown("Here is my query plan:")
-        st.code(format_plan_display(plan), language=None)
-        c1, c2 = st.columns([2, 5])
-        with c1:
-            if st.button("Yes, continue", type="primary", use_container_width=True):
-                agents = get_agents()
-                with st.spinner("Writing SQL..."):
-
-                    sql_data = run_async(
-                        generate_sql(plan, st.session_state.last_question, agent=agents["sql"])
-                    )
-                st.session_state.stage = "sql"
-                st.session_state.stage_data = sql_data
-                st.rerun()
-        with c2:
-            if st.button("No, start over", use_container_width=True):
-                clear_stage()
-                st.rerun()
-
-elif stage == "sql":
-    sql_data = st.session_state.stage_data
-    sql = sql_data.get("sql", "")
-
-    with st.chat_message("assistant"):
-        st.markdown("Here is the SQL:")
-        st.code(sql, language="sql")
-        if sql_data.get("explanation"):
-            st.caption(sql_data["explanation"])
-
-        edited = st.text_area(
-            "Edit if needed:",
-            value=sql,
-            height=110,
-            key="sql_box",
-            label_visibility="collapsed",
-        )
-
-        c1, c2 = st.columns([2, 5])
-        with c1:
-            run_clicked = st.button("Run query", type="primary", use_container_width=True)
-        with c2:
-            if st.button("Cancel", use_container_width=True):
-                clear_stage()
-                st.rerun()
-
-        if run_clicked:
-            agents = get_agents()
-            plan = st.session_state.last_plan
-            question = st.session_state.last_question
-            memory = agents["memory"]
-
-            with st.spinner("Running..."):
+    # Display the conversation history
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if msg.get("chart"):
+                st.plotly_chart(msg["chart"], use_container_width=True)
 
 
-                raw_str = run_sql(sql=edited)
-                raw = json.loads(raw_str)
+    stage = st.session_state.stage
 
-                if "error" in raw:
-                    msg_content = f"```sql\n{edited}\n```\n\nQuery failed: {raw['error']}\n\n{raw.get('hint', '')}"
-                    st.session_state.messages.append({"role": "assistant", "content": msg_content})
+    # Depending on the current stage of the conversation, display different content and options to the user. The main stages are:
+    # - clarifying: the agent needs more information from the user before it can generate a plan
+    # - plan: the agent has generated a plan and is asking the user to confirm before generating SQL
+    # - sql: the agent has generated SQL and is showing it to the user, allowing them to edit before running
+    # - viz: the agent has generated a visualization spec and is asking the user if they want to see it
+    # - reaction: the user has indicated that something was wrong with the result, and the agent is asking for more details to understand what the issue was
+    if stage == "clarifying":
+        plan = st.session_state.stage_data
+        with st.chat_message("assistant"):
+            st.write(plan.get("question", "Could you clarify what you're looking for?"))
+
+    elif stage == "plan":
+        plan = st.session_state.stage_data
+        with st.chat_message("assistant"):
+            if plan.get("intent") and plan["intent"] != "unknown":
+                st.markdown(f"**Intent:** {plan['intent'].title()}")
+            st.markdown("Here is my query plan:")
+            st.code(format_plan_display(plan), language=None)
+            c1, c2 = st.columns([2, 5])
+            with c1:
+                if st.button("Yes, continue", type="primary", use_container_width=True):
+                    agents = get_agents()
+                    with st.spinner("Writing SQL..."):
+
+                        sql_data = run_async(
+                            generate_sql(plan, st.session_state.last_question, agent=agents["sql"])
+                        )
+                        # capture SQL agent token usage
+                        u = agents["sql"].last_usage
+                        st.session_state.last_sql_usage = u
+
+                    st.session_state.stage = "sql"
+                    st.session_state.stage_data = sql_data
+                    st.rerun()
+            with c2:
+                if st.button("No, start over", use_container_width=True):
                     clear_stage()
                     st.rerun()
 
-                formatted = run_async(format_response(question, raw, plan, agent=agents["formatter"]))
+    elif stage == "sql":
+        sql_data = st.session_state.stage_data
+        sql = sql_data.get("sql", "")
 
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": f"```sql\n{edited}\n```\n\n{formatted}",
-                })
+        with st.chat_message("assistant"):
+            st.markdown("Here is the SQL:")
+            st.code(sql, language="sql")
+            if sql_data.get("explanation"):
+                st.caption(sql_data["explanation"])
 
-                st.session_state.last_result = raw
+            edited = st.text_area(
+                "Edit if needed:",
+                value=sql,
+                height=110,
+                key="sql_box",
+                label_visibility="collapsed",
+            )
 
-                filters = plan.get("filters", {})
-                memory.add_turn(Turn(
-                    question=question,
-                    table=plan.get("table"),
-                    entity_filter=plan.get("entity_filter"),
-                    time_start=filters.get("time_start"),
-                    time_end=filters.get("time_end"),
-                    biz_hours=filters.get("business_hours_only", False),
-                    answer_summary=summarise_result(question, plan, raw),
-                ))
-                memory.update_entities_from_results(raw.get("results", []), plan.get("table", ""))
-
-                viz_spec = run_async(plan_viz(raw, agent=agents["viz"]))
-                if viz_spec:
-                    st.session_state.stage = "viz"
-                    st.session_state.stage_data = viz_spec
-                else:
+            c1, c2 = st.columns([2, 5])
+            with c1:
+                run_clicked = st.button("Run query", type="primary", use_container_width=True)
+            with c2:
+                if st.button("Cancel", use_container_width=True):
                     clear_stage()
+                    st.rerun()
 
-                st.rerun()
+            if run_clicked:
+                agents = get_agents()
+                plan = st.session_state.last_plan
+                question = st.session_state.last_question
+                memory = agents["memory"]
 
-elif stage == "viz":
-    spec = st.session_state.stage_data
-    with st.chat_message("assistant"):
-        st.write(f"Want to see this as a {spec.get('chart_type', 'chart')}?")
-        c1, c2 = st.columns([2, 5])
-        with c1:
-            if st.button("Show chart", use_container_width=True):
+                with st.spinner("Running..."):
 
-                fig = build_chart(spec, st.session_state.last_result)
-                if fig:
-                    st.session_state.messages.append({"role": "assistant", "content": "", "chart": fig})
-                clear_stage()
-                st.rerun()
-        with c2:
-            if st.button("No thanks", use_container_width=True):
-                clear_stage()
-                st.rerun()
+                    # traceing records
+                    t_start = time.time()
+                    trace = TraceRecord(question=question)
+                    trace.table_selected = plan.get("table")
+                    trace.intent = plan.get("intent")
+                    ef = plan.get("entity_filter")
+                    if ef:
+                        trace.entity_filter = f"{ef.get('column')}={ef.get('value')}"
 
-elif stage == "reaction":
-    with st.chat_message("assistant"):
-        st.write("What was wrong — the numbers, the time period, the table, or the chart?")
+                    # orchestrator usage from when the plan was built
+                    orch_u = st.session_state.get("last_orchestrator_usage", {})
+                    if orch_u:
+                        trace.add_usage(
+                            orch_u.get("model", "gpt-4.1"),
+                            orch_u.get("tokens_in", 0),
+                            orch_u.get("tokens_out", 0),
+                        )
 
-elif stage == "reaction_answer":
-    pass
-
-# If we're not in a special stage, we treat the user input as a new question and run it through the pipeline.
-user_input = st.chat_input("Ask about the January contact centre data...")
-
-if user_input:
-    if not os.getenv("OPENAI_API_KEY"):
-        st.error("OPENAI_API_KEY is missing from .env")
-        st.stop()
-
-    agents = get_agents()
-    memory = agents["memory"]
-
-    st.session_state.messages.append({"role": "user", "content": user_input})
+                    # SQL agent usage from when SQL was generated
+                    sql_u = st.session_state.get("last_sql_usage", {})
+                    if sql_u:
+                        trace.add_usage(
+                            sql_u.get("model", "gpt-4.1"),
+                            sql_u.get("tokens_in", 0),
+                            sql_u.get("tokens_out", 0),
+                        )
 
 
-    ok, err = check_input(user_input)
-    if not ok:
-        st.session_state.messages.append({"role": "assistant", "content": err})
-        st.rerun()
+                    raw_str = run_sql(sql=edited)
+                    raw = json.loads(raw_str)
 
-    if stage == "reaction":
-        low = user_input.lower()
-        if any(w in low for w in ["chart", "plot", "graph", "visual"]):
-            last = st.session_state.last_result
-            if last and last.get("results"):
-                spec = run_async(plan_viz(last, agent=agents["viz"]))
-                if spec:
-                    fig = build_chart(spec, last)
-                    if fig:
-                        st.session_state.messages.append({"role": "assistant", "content": "", "chart": fig})
+                    if "error" in raw:
+                        msg_content = f"```sql\n{edited}\n```\n\nQuery failed: {raw['error']}\n\n{raw.get('hint', '')}"
+                        st.session_state.messages.append({"role": "assistant", "content": msg_content})
                         clear_stage()
                         st.rerun()
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": "No alternative chart available for that data. Ask the question again and I'll re-run it.",
-            })
-        else:
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": "Got it. Ask the question again with the correction and I'll run a fresh query.",
-            })
-        clear_stage()
-        st.rerun()
 
-    elif stage == "clarifying":
-        st.session_state.last_question = user_input
-        with st.spinner("Got it..."):
-            run_pipeline(user_input, agents)
-        st.rerun()
+                    formatted = run_async(format_response(question, raw, plan, agent=agents["formatter"]))
 
-    elif is_reaction(user_input):
-        memory.flag_last_as_feedback()
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": "What was wrong — the numbers, the time period, the table, or the chart?",
-        })
-        st.session_state.stage = "reaction"
-        st.session_state.stage_data = None
-        st.rerun()
+                    # formatter token usage
+                    u = agents["formatter"].last_usage
+                    trace.add_usage(u["model"], u["tokens_in"], u["tokens_out"])
 
-    else:
-        st.session_state.last_question = user_input
-        with st.spinner("Thinking..."):
-            run_pipeline(user_input, agents)
-        st.rerun()
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"```sql\n{edited}\n```\n\n{formatted}",
+                    })
 
-# Some pre set Qs
-with st.sidebar:
-    st.markdown("**Try asking:**")
-    questions = [
-        "Which 5 agents handled the most calls in January?",
-        "Which 3 queues had the highest average wait during business hours?",
-        "Compare inbound volume: first half vs second half",
-        "What was the busiest hour?",
-        "How many calls were abandoned?",
-        "How many rows are in each table?",
-        "Which queue had the lowest service level last week?",
-        "If abandonment rises 20%, how many more agents are needed?",
-    ]
-    for q in questions:
-        if st.button(q, use_container_width=True, key=f"sb_{q[:25]}"):
-            agents = get_agents()
-            st.session_state.last_question = q
-            st.session_state.messages.append({"role": "user", "content": q})
-            with st.spinner("Thinking..."):
-                run_pipeline(q, agents)
+                    st.session_state.last_result = raw
+
+                    filters = plan.get("filters", {})
+                    memory.add_turn(Turn(
+                        question=question,
+                        table=plan.get("table"),
+                        entity_filter=plan.get("entity_filter"),
+                        time_start=filters.get("time_start"),
+                        time_end=filters.get("time_end"),
+                        biz_hours=filters.get("business_hours_only", False),
+                        answer_summary=summarise_result(question, plan, raw),
+                    ))
+                    memory.update_entities_from_results(raw.get("results", []), plan.get("table", ""))
+
+                    viz_spec = run_async(plan_viz(raw, agent=agents["viz"]))
+                    if viz_spec:
+                        st.session_state.stage = "viz"
+                        st.session_state.stage_data = viz_spec
+                    else:
+                        clear_stage()
+
+                    trace.sql_generated = edited
+                    trace.latency_ms = int((time.time() - t_start) * 1000)
+                    if "error" in raw:
+                        trace.error = raw["error"]
+                    write_trace(trace)
+
+                    st.rerun()
+
+    elif stage == "viz":
+        spec = st.session_state.stage_data
+        with st.chat_message("assistant"):
+            st.write(f"Want to see this as a {spec.get('chart_type', 'chart')}?")
+            c1, c2 = st.columns([2, 5])
+            with c1:
+                if st.button("Show chart", use_container_width=True):
+
+                    fig = build_chart(spec, st.session_state.last_result)
+                    if fig:
+                        st.session_state.messages.append({"role": "assistant", "content": "", "chart": fig})
+                    clear_stage()
+                    st.rerun()
+            with c2:
+                if st.button("No thanks", use_container_width=True):
+                    clear_stage()
+                    st.rerun()
+
+    elif stage == "reaction":
+        with st.chat_message("assistant"):
+            st.write("What was wrong — the numbers, the time period, the table, or the chart?")
+
+    elif stage == "reaction_answer":
+        pass
+
+    # If we're not in a special stage, we treat the user input as a new question and run it through the pipeline.
+    user_input = st.chat_input("Ask about the January contact centre data...")
+
+    if user_input:
+        if not os.getenv("OPENAI_API_KEY"):
+            st.error("OPENAI_API_KEY is missing from .env")
+            st.stop()
+
+        agents = get_agents()
+        memory = agents["memory"]
+
+        st.session_state.messages.append({"role": "user", "content": user_input})
+
+
+        ok, err = check_input(user_input)
+        if not ok:
+            st.session_state.messages.append({"role": "assistant", "content": err})
             st.rerun()
 
+        if stage == "reaction":
+            low = user_input.lower()
+            if any(w in low for w in ["chart", "plot", "graph", "visual"]):
+                last = st.session_state.last_result
+                if last and last.get("results"):
+                    spec = run_async(plan_viz(last, agent=agents["viz"]))
+                    if spec:
+                        fig = build_chart(spec, last)
+                        if fig:
+                            st.session_state.messages.append({"role": "assistant", "content": "", "chart": fig})
+                            clear_stage()
+                            st.rerun()
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": "No alternative chart available for that data. Ask the question again and I'll re-run it.",
+                })
+            else:
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": "Got it. Ask the question again with the correction and I'll run a fresh query.",
+                })
+            clear_stage()
+            st.rerun()
+
+        elif stage == "clarifying":
+            st.session_state.last_question = user_input
+            with st.spinner("Got it..."):
+                run_pipeline(user_input, agents)
+            st.rerun()
+
+        elif is_reaction(user_input):
+            memory.flag_last_as_feedback()
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": "What was wrong — the numbers, the time period, the table, or the chart?",
+            })
+            st.session_state.stage = "reaction"
+            st.session_state.stage_data = None
+            st.rerun()
+
+        else:
+            st.session_state.last_question = user_input
+            with st.spinner("Thinking..."):
+                run_pipeline(user_input, agents)
+            st.rerun()
+
+    # Some pre set Qs
+    with st.sidebar:
+        st.markdown("**Try asking:**")
+        questions = [
+            "Which 5 agents handled the most calls in January?",
+            "Which 3 queues had the highest average wait during business hours?",
+            "Compare inbound volume: first half vs second half",
+            "What was the busiest hour?",
+            "How many calls were abandoned?",
+            "How many rows are in each table?",
+            "Which queue had the lowest service level last week?",
+            "If abandonment rises 20%, how many more agents are needed?",
+        ]
+        for q in questions:
+            if st.button(q, use_container_width=True, key=f"sb_{q[:25]}"):
+                agents = get_agents()
+                st.session_state.last_question = q
+                st.session_state.messages.append({"role": "user", "content": q})
+                with st.spinner("Thinking..."):
+                    run_pipeline(q, agents)
+                st.rerun()
+
+        st.divider()
+        if st.button("Clear conversation", use_container_width=True):
+            for k in ["messages", "stage", "stage_data", "last_question", "last_plan", "last_result"]:
+                st.session_state[k] = [] if k == "messages" else None
+            if "memory" in st.session_state:
+                st.session_state.memory.clear()
+            st.rerun()
+
+
+with tab_eval:
+    st.markdown("### Observability")
+    st.caption("Live traces, eval results, and cost tracking from llmops/traces.db")
+
+    traces = read_traces(limit=200)
+    eval_rows = read_eval_runs()
+
+    if not traces:
+        st.info("No traces yet. Ask a question in the Chat tab to see data here.")
+        st.stop()
+
+    df = pd.DataFrame(traces)
+    df["ts"] = pd.to_datetime(df["ts"], unit="s")
+    df["time_str"] = df["ts"].dt.strftime("%H:%M:%S")
+
+    # summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total queries", len(df))
+    col2.metric("Avg latency", f"{df['latency_ms'].mean():.0f}ms")
+    col3.metric("Total cost", f"${df['cost_usd'].sum():.4f}")
+    col4.metric("Errors", int(df["error"].notna().sum()))
+
     st.divider()
-    if st.button("Clear conversation", use_container_width=True):
-        for k in ["messages", "stage", "stage_data", "last_question", "last_plan", "last_result"]:
-            st.session_state[k] = [] if k == "messages" else None
-        if "memory" in st.session_state:
-            st.session_state.memory.clear()
-        st.rerun()
+
+    left, right = st.columns(2)
+
+    # intent distribution
+    with left:
+        st.markdown("**Intent distribution**")
+        intent_counts = df["intent"].value_counts().reset_index()
+        intent_counts.columns = ["intent", "count"]
+        if not intent_counts.empty:
+            fig = px.bar(intent_counts, x="intent", y="count",
+                         color="intent",
+                         color_discrete_sequence=px.colors.qualitative.Set2)
+            fig.update_layout(
+                height=240, showlegend=False,
+                margin=dict(l=0, r=0, t=10, b=0),
+                plot_bgcolor="white", paper_bgcolor="white",
+            )
+            fig.update_xaxes(showgrid=False)
+            fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
+            st.plotly_chart(fig, use_container_width=True)
+
+    # latency over time
+    with right:
+        st.markdown("**Latency over time (ms)**")
+        df_sorted = df.sort_values("ts")
+        fig2 = px.line(df_sorted, x="time_str", y="latency_ms", markers=True)
+        fig2.update_layout(
+            height=240, margin=dict(l=0, r=0, t=10, b=0),
+            plot_bgcolor="white", paper_bgcolor="white",
+        )
+        fig2.update_xaxes(showgrid=False, title="")
+        fig2.update_yaxes(showgrid=True, gridcolor="#f0f0f0", title="ms")
+        st.plotly_chart(fig2, use_container_width=True)
+
+    # cost by model
+    st.markdown("**Cost breakdown**")
+    cost_df = df[["models_used", "cost_usd", "tokens_in", "tokens_out"]].copy()
+    cost_df["cost_usd"] = cost_df["cost_usd"].round(5)
+    cost_df["tokens_in"] = cost_df["tokens_in"].astype(int)
+    cost_df["tokens_out"] = cost_df["tokens_out"].astype(int)
+    cost_df = cost_df.rename(columns={
+        "models_used": "models",
+        "cost_usd": "cost ($)",
+        "tokens_in": "tokens in",
+        "tokens_out": "tokens out",
+    })
+    st.dataframe(cost_df.head(20), use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # eval results
+    st.markdown("**Eval run history**")
+
+    if not eval_rows:
+        st.info("No eval runs yet. Run `uv run python eval/runner.py Q01 Q02 Q03` to see results here.")
+    else:
+        df_eval = pd.DataFrame(eval_rows)
+        df_eval["ts"] = pd.to_datetime(df_eval["ts"], unit="s")
+
+        run_ids = df_eval["run_id"].unique().tolist()
+        selected_run = st.selectbox("Select eval run", run_ids, index=0)
+
+        run_df = df_eval[df_eval["run_id"] == selected_run].copy()
+
+        total = len(run_df)
+        table_acc = run_df["table_correct"].mean() * 100
+        intent_acc = run_df["intent_correct"].mean() * 100
+        both = ((run_df["table_correct"] == 1) & (run_df["intent_correct"] == 1)).mean() * 100
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Questions", total)
+        m2.metric("Table accuracy", f"{table_acc:.1f}%")
+        m3.metric("Intent accuracy", f"{intent_acc:.1f}%")
+        gate_color = "normal" if both >= 90 else "inverse"
+        m4.metric("Gate (>=90%)", f"{both:.1f}%", delta="pass" if both >= 90 else "fail",
+                  delta_color=gate_color)
+
+        display_cols = ["question_id", "question", "expected_table", "got_table",
+                        "table_correct", "expected_intent", "got_intent",
+                        "intent_correct", "error"]
+        display_cols = [c for c in display_cols if c in run_df.columns]
+
+        st.dataframe(
+            run_df[display_cols].style.applymap(
+                lambda v: "background-color: #d4edda" if v == 1
+                else "background-color: #f8d7da" if v == 0 else "",
+                subset=[c for c in ["table_correct", "intent_correct"]
+                        if c in run_df.columns]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.divider()
+
+    # raw traces
+    st.markdown("**Trace explorer**")
+    trace_display = df[[
+        "trace_id", "time_str", "question", "table_selected",
+        "intent", "latency_ms", "cost_usd", "error"
+    ]].copy()
+    trace_display["question"] = trace_display["question"].str[:60] + "..."
+    trace_display["cost_usd"] = trace_display["cost_usd"].apply(lambda x: f"${x:.5f}")
+    st.dataframe(trace_display, use_container_width=True, hide_index=True)
