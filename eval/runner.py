@@ -4,6 +4,7 @@ import time
 import uuid
 import os
 import sys
+import traceback
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -66,6 +67,7 @@ async def run_eval(subset=None, qa_path="eval/golden_qa.json"):
 
         except Exception as e:
             print(f"  ERROR  {q['id']}  {e}")
+            traceback.print_exc()
             write_eval_result(
                 run_id=run_id,
                 question_id=q["id"],
