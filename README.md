@@ -116,7 +116,7 @@ Passes if both are >= 90%. Results are also visible in the Observability tab.
 
 - Current date is fixed to **2026-01-31** - the last day of the available data
 - "Business hours" means 08:00–17:59
-- "Last week" means Jan 25–31, "first half" means Jan 1–15, "second half" means Jan 16–31
+- "Last week" means Jan 25-31, "first half" means Jan 1-15, "second half" means Jan 16-31
 - The data dictionary DOCX is loaded at startup - if missing, a hardcoded fallback is used
 
 ---
@@ -129,6 +129,6 @@ Passes if both are >= 90%. Results are also visible in the Observability tab.
   in different ways may use different columns (All Ans vs In Ans).
   Fix can be: store columns_used in ConversationMemory and pass to orchestrator.
 - No streaming - responses appear all at once after the full pipeline completes.
-- Ollama/local models can be integrated but are not included or tested in this POC. client_factory.py is designed to support them, but might require tweaks to conde, prompt formats and guardrails for non-OpenAI models.
+- Ollama/local models can be integrated but are not included or tested in this POC. client_factory.py is designed to support them, but might require tweaks to code, prompt formats and guardrails for non-OpenAI models.
 
 ---
