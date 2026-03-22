@@ -9,8 +9,8 @@ def make_client():
 
 def get_model(role):
     return {
-        "orchestrator": os.getenv("MODEL_MAIN", "gpt-4.1"),
-        "sql":          os.getenv("MODEL_COMPLEX", "o4-mini"),
-        "formatter":    os.getenv("MODEL_MINI", "gpt-4.1-mini"),
-        "viz":          os.getenv("MODEL_NANO", "gpt-4.1-nano"),
+        "orchestrator": os.getenv("MODEL_MAIN", "gpt-4.1" ), # "gpt-5.4" or "gpt-4.1"
+        "sql":          os.getenv("MODEL_COMPLEX", "o4-mini"), # "gpt-5.4" or "o4-mini"
+        "formatter":    os.getenv("MODEL_MINI", "gpt-4.1-mini"), # "gpt-5.4-mini"  or gpt-4.1-mini
+        "viz":          os.getenv("MODEL_NANO", "gpt-4.1-nano"), # "gpt-5.4-nano" or "gpt-4.1-nano"
     }.get(role, "gpt-4.1")
