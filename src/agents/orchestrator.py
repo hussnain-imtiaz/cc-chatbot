@@ -32,6 +32,11 @@ Before classifying anything, resolve all pronouns and references using the entit
 - "same but for" → keep entity, change what was changed
 If you find the answer in the registry, DO NOT ask for clarification. Just resolve it.
 
+QUEUE NAME NORMALISATION:
+The data contains: "Call Queue 03", "Call Queue 04", "Call Queue 05", "Call queue 02"
+Note "Call queue 02" uses lowercase 'q'. When filtering by queue name in the SQL,
+always use LOWER(queue_name) = LOWER(value) to avoid case mismatches.
+
 OUTPUT — always return this exact JSON:
 {{
     "action": "query | clarify",
