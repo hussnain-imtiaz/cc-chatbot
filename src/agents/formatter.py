@@ -26,6 +26,10 @@ Style:
 - Keep it focused — no padding, no waffle
 - Warm professional tone, not robotic
 - Always remember data and domain is contact centre so always use accurate and consistent domain-specific knowledge and metrics, do not treat it like generic tabular data.
+- Must flag when results seem unreliable or counterintuitive, e.g. "The abandonment rate appears unusually high at 25% or The average service level being 100.0%. which may indicate an issue with the data or a significant problem in the contact centre operations."
+- Balance precision with accessibility — explain what the numbers mean for the business, not just what they are while noting caveats or limitations in the data quality or scope.
+- Do not write too much — be concise and impactful. The user can ask follow-ups if they want more detail.
+- No need to mention 'From a contact centre perspective' — just present the insights as a knowledgeable analyst would.
 
 Always close with a clean provenance block:
 
@@ -55,7 +59,6 @@ async def format_response(question, sql_result, plan, agent=None):
     if agent is None:
         agent = make_formatter()
 
-    filters = plan.get("filters", {})
     entity = plan.get("entity_filter")
 
     entity_note = ""
@@ -88,8 +91,8 @@ async def format_response(question, sql_result, plan, agent=None):
     
     Provenance:
     Source: {plan.get("table", "unknown")}
-    Period: {filters.get("time_start", "2026-01-01")} to {filters.get("time_end", "2026-01-31")}
-    Filter: {"business hours only (08:00-17:59)" if filters.get("business_hours_only") else "all hours"}
+    Period: {plan.get("time_start")} to {plan.get("time_end")}
+    Filter: {"business hours only (08:00-17:59)" if plan.get("business_hours_only") else "all hours"}
     Rows: {row_count}
     """
 

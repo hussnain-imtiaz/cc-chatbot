@@ -3,7 +3,6 @@ from src.agents.base import Agent
 from src.agents.client_factory import make_client, get_model
 from src.tools.sql_tools import get_schema, dict_lookup
 
-
 INSTRUCTIONS = """You are a SQL expert for a contact centre SQLite database.
 
 CRITICAL: This is CONTACT CENTRE data. You MUST write queries that extract data for CC-specific formulas:
@@ -54,6 +53,34 @@ Return ONLY this JSON:
 }
 """
 
+### Can be used as a strict reference for not allowing the main problem of entirely in what the SQL agent is allowed to freely decide.
+# MANDATORY CC FORMULA EXPRESSIONS - use these exact SQL fragments every time:
+#
+# Service level:
+#   ROUND(100.0 * SUM("Ans <= 15s") / NULLIF(SUM("In"), 0), 1)
+#   - denominator is ALWAYS "In" (total offered), NEVER "In Ans"
+#   - NEVER use AVG("% Svc (Other Value)") — this column is unreliable in the estate table
+#
+# Abandonment rate:
+#   ROUND(100.0 * SUM("In Abnd") / NULLIF(SUM("In"), 0), 2)
+#   - denominator is ALWAYS "In" (total offered), NEVER "In Ans"
+#
+# AHT (Average Handle Time):
+#   ROUND(SUM("Tot Tlk (Seconds Value)") / NULLIF(SUM("In Ans"), 0), 1)
+#
+# Traffic Intensity (Erlangs):
+#   SUM("In") * (AVG("Avg Tlk (Seconds Value)") + AVG("Avg Held (Seconds Value)")) / 3600.0
+#
+# Utilisation:
+#   ROUND(SUM("Handling (Seconds Value)") / NULLIF(SUM("Available (Seconds Value)") + SUM("Handling (Seconds Value)"), 0) * 100, 1)
+#
+# FORBIDDEN:
+#   AVG("% Svc (Other Value)")  - always 100% in estate, meaningless, instead calculate service level from "Ans <= 15s" and "In"
+#   "Int Agt ID"                - entirely null, never select this
+#
+# When writing any query involving service level, abandonment, AHT, or utilisation,
+# you MUST copy the exact expression from FORMULA_CONSTANTS above.
+# Do not derive your own version of these formulas.
 
 def make_sql_agent():
     return Agent(

@@ -8,6 +8,7 @@ EXCEL_EPOCH = datetime(1899, 12, 30)
 
 # simple module-level cache so we don't re-read 3 CSVs on every function call
 _loaded = {}
+DATA_QUALITY_WARNINGS = {}
 
 
 def parse_string_interval(s):
@@ -36,12 +37,29 @@ def _prep(df):
     df["is_biz_hours"] = df["hour"].between(8, 17)
     return df
 
-
 def load_estate(path):
     df = pd.read_csv(path)
     df = df.dropna(subset=["Interval"]).reset_index(drop=True)
     df["dt"] = df["Interval"].apply(parse_string_interval)
-    return _prep(df)
+    df = _prep(df)
+
+    # Guard: flag zero-variance columns before they mislead the SQL agent
+    svc_col = "% Svc (Other Value)"
+    if svc_col in df.columns:
+        if df[svc_col].std() < 0.01:
+            DATA_QUALITY_WARNINGS["estate_svc_pct"] = (
+                f"WARNING: '{svc_col}' in estate has zero variance "
+                f"(all values = {df[svc_col].iloc[0]:.1f}%). "
+                "Do not use this column for service level analysis. "
+                "Compute service level from Ans <= 15s / In instead."
+            )
+    return df
+
+def get_data_quality_context():
+    if not DATA_QUALITY_WARNINGS:
+        return ""
+    lines = "\n".join(f"- {v}" for v in DATA_QUALITY_WARNINGS.values())
+    return f"\nDATA QUALITY NOTES (mention if relevant):\n{lines}\n"
 
 
 def load_queues(path):
