@@ -2,7 +2,7 @@
 name = "cc-chatbot"
 version = "0.1.0"
 description = "Contact Centre Analytics Chatbot — POC"
-requires-python = ">=3.11"
+requires-python = ">=3.9, <3.14"
 dependencies = [
     "streamlit>=1.40",
     "openai>=1.50",
@@ -15,6 +15,11 @@ dependencies = [
     "tiktoken>=0.7",
     "pytest>=8.0",
     "plotly",
+    # production additions
+    "snowflake-connector-python>=3.6",          # read data from Snowflake
+    "snowflake-connector-python[pandas]>=3.6",  # write_pandas helper
+    "azure-monitor-opentelemetry-exporter", # send traces to App Insights
+    "opentelemetry-sdk>=1.20",                  # required by the azure exporter
 ]
 
 [project.optional-dependencies]

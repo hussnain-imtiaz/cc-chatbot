@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import time
 import uuid
@@ -22,6 +23,40 @@ MODEL_PRICING = {
     "gpt-4o-mini":  (0.15,  0.60),
     "o3-mini":      (1.10,  4.40),
 }
+
+# set up Azure Application Insights if the connection string is present
+# if not set, we just skip it silently - local dev works the same way
+_insights_client = None
+
+def _get_insights_client():
+    global _insights_client
+    if _insights_client is not None:
+        return _insights_client
+
+    conn_str = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
+    if not conn_str:
+        return None
+
+    try:
+        from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        exporter = AzureMonitorTraceExporter(connection_string=conn_str)
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        _insights_client = trace.get_tracer("cc-chatbot")
+        print("Azure Application Insights connected")
+    except Exception as e:
+        # if the azure package is not installed or credentials are wrong, just skip it
+        # we don't want monitoring to break the app
+        print(f"App Insights setup skipped: {e}")
+        _insights_client = None
+
+    return _insights_client
+
 
 @dataclass
 class TraceRecord:
@@ -86,8 +121,31 @@ def _ensure_db(path=DB_PATH):
         """)
         conn.commit()
 
+# writes a trace record to Azure Application Insights, if connected
+def _write_to_insights(record: TraceRecord):
+    tracer = _get_insights_client()
+    if tracer is None:
+        return
+
+    try:
+        with tracer.start_as_current_span("cc_chatbot_trace") as span:
+            # custom attributes that we can query in the Azure portal
+            span.set_attribute("question", record.question[:200])
+            span.set_attribute("table_selected", record.table_selected or "")
+            span.set_attribute("intent", record.intent or "")
+            span.set_attribute("tokens_in", record.tokens_in)
+            span.set_attribute("tokens_out", record.tokens_out)
+            span.set_attribute("cost_usd", round(record.cost_usd, 6))
+            span.set_attribute("latency_ms", record.latency_ms)
+            span.set_attribute("models_used", record.models_used)
+            span.set_attribute("has_error", bool(record.error))
+    except Exception:
+        # never let monitoring break the main app
+        pass
+
 
 def write_trace(record: TraceRecord, path=DB_PATH):
+    # always write to local SQLite (works in dev and in the container)
     _ensure_db(path)
     with sqlite3.connect(path) as conn:
         conn.execute("""
@@ -105,6 +163,9 @@ def write_trace(record: TraceRecord, path=DB_PATH):
             record.models_used, record.error,
         ))
         conn.commit()
+
+    # also send to App Insights if connected - dual write, zero coupling
+    _write_to_insights(record)
 
 
 def write_eval_result(run_id, question_id, question, expected_table,
