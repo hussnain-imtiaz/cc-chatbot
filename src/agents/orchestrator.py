@@ -35,7 +35,7 @@ If you find the answer in the registry, DO NOT ask for clarification. Just resol
 OUTPUT — always return this exact JSON:
 {{
     "action": "query | clarify",
-    "reasoning": "one sentence: what you understood the user to be asking",
+    "reasoning": "one/two sentences: what you understood the user to be asking and why you chose that action, that is, what clues in the question led you to your understanding",
     "table": "estate | queues | agents | all | null",
     "entity_filter": {{"column": "agent_name", "value": "Nina Reed"}} or null,
     "intent": "aggregate | top_n | compare | peak | staffing | unknown",
