@@ -17,7 +17,7 @@ You need Python 3.11+, [uv](https://github.com/astral-sh/uv), and an OpenAI API 
 
 ```bash
 # 1. clone
-git clone https://github.com/YOUR_USERNAME/cc-chatbot.git
+git clone https://github.com/hussnain-imtiaz/cc-chatbot.git
 cd cc-chatbot
 
 # 2. install uv if you don't have it
@@ -109,7 +109,7 @@ uv run python eval/runner.py
 ```
 
 The eval scores table selection accuracy and intent classification accuracy.
-Passes if both are >= 90%. Results are also visible in the Observability tab.
+Passes if both are >= 90%. Results are also visible in the Evals tab.
 
 ---
 ## Assumptions
@@ -130,5 +130,6 @@ Passes if both are >= 90%. Results are also visible in the Observability tab.
   Fix can be: store columns_used in ConversationMemory and pass to orchestrator.
 - No streaming - responses appear all at once after the full pipeline completes.
 - Ollama/local models can be integrated but are not included or tested in this POC. client_factory.py is designed to support them, but might require tweaks to code, prompt formats and guardrails for non-OpenAI models.
+- A strict reference is in prompt for not allowing the main problem of which metrics/formula SQL agent is allowed to freely decide. But this needs a better approach and can be handled via tooling and better prompt engineering.
 
 ---
